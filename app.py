@@ -7,7 +7,7 @@ import os
 import numpy as np
 import cv2
 from shapely.geometry import Polygon
-import gpd as gpd  # Corrigido alias padrão geopandas
+import geopandas  as gpd  # Corrigido alias padrão geopandas
 import geopandas as gpd
 import zipfile
 import gc
