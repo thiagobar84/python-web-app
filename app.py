@@ -104,7 +104,8 @@ def vetorizar_casas(img_data, limites):
     try:
         sam = SamGeo(
             model_type="vit_b",
-            checkpoint="sam_vit_b_01ec64.pth",
+            checkpoint=None,  # Deixe None para ele baixar direto do repositório oficial se não achar local
+            # checkpoint="sam_vit_b_01ec64.pth",
             sam_kwargs=None
         )
         
