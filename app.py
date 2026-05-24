@@ -22,9 +22,15 @@ st.title("🗺️ Visualizador Web de Ortofotos com IA e Importador Automático"
 st.markdown(
     """
     <style>
+    /* Bloqueia o esmaecimento de blocos em atualização */
     div[data-testid="stVerticalBlockBorderWrapper"] { opacity: 1 !important; filter: none !important; }
-    div[data-testid="stVerticalBlock"] { opacity: 1 !important; }
-    [stale-data="true"] { opacity: 1 !important; filter: none !important; }
+    div[data-testid="stVerticalBlock"] { opacity: 1 !important; filter: none !important; }
+    [data-stale="true"] { opacity: 1 !important; filter: none !important; }
+    
+    /* Remove especificamente o efeito escuro do componente do mapa */
+    div[data-testid="stDataFrame"] { opacity: 1 !important; filter: none !important; }
+    iframe { opacity: 1 !important; filter: none !important; }
+    .stfolium-container { opacity: 1 !important; filter: none !important; }
     </style>
     """,
     unsafe_allow_html=True
@@ -273,6 +279,7 @@ with col1:
             st.error(f"Erro ao gerar shapefile: {exp_error}")
 
 # --- MAPA DE EXIBIÇÃO (COLUNA 2) ---
+# --- MAPA DE EXIBIÇÃO (COLUNA 2) ---
 with col2:
     m = folium.Map(location=st.session_state.centro_mapa, zoom_start=st.session_state.zoom_mapa, control_scale=True)
     
@@ -304,20 +311,33 @@ with col2:
         )
         draw.add_to(m)
         
-    output_mapa = st_folium(m, width="100%", height=650, key="mapa_dinamico", returned_objects=["all_drawings"])
+    # Renderiza o mapa capturando o status dos desenhos e a última ação realizada
+    output_mapa = st_folium(
+        m, 
+        width="100%", 
+        height=650, 
+        key="mapa_dinamico", 
+        returned_objects=["all_drawings", "last_active_drawing"]
+    )
     
-    # Sincroniza qualquer alteração feita pelo usuário usando as ferramentas Draw (adicionar/remover/editar)
+    # ✅ LÓGICA BLINDADA CONTRA CLIQUES DE POPUP
     if output_mapa and output_mapa.get("all_drawings") is not None:
-        novos_poligonos = []
-        for desenho in output_mapa["all_drawings"]:
-            if "geometry" in desenho and desenho["geometry"]["type"] == "Polygon":
-                coords_raw = desenho["geometry"]["coordinates"][0]
-                if coords_raw:
-                    # Formato do GeoJSON do Leaflet vem aninhado e como [Lon, Lat]
-                    # Invertemos para [Lat, Lon] padrão do Folium
-                    coords_corrigidas = [[float(pt[1]), float(pt[0])] for pt in coords_raw]
-                    novos_poligonos.append(coords_corrigidas)
-                    
-        if len(novos_poligonos) != len(st.session_state.poligonos_finais):
-            st.session_state.poligonos_finais = novos_poligonos
-            st.rerun()
+        last_action = output_mapa.get("last_active_drawing", {})
+        
+        # Só atualiza a memória se houver uma ação geométrica real na tela (Draw, Edit, Delete)
+        # Se 'last_action' for None ou não contiver propriedades de desenho, ignora o clique do popup
+        if last_action and "geometry" in last_action:
+            novos_poligonos = []
+            for desenho in output_mapa["all_drawings"]:
+                if "geometry" in desenho and desenho["geometry"]["type"] == "Polygon":
+                    coords_raw = desenho["geometry"]["coordinates"]
+                    if coords_raw:
+                        # ✅ CORRIGIDO: Coleta do anel externo [0] para o padrão Folium [Lat, Lon]
+                        anel_externo = coords_raw[0]
+                        coords_corrigidas = [[float(pt[1]), float(pt[0])] for pt in anel_externo]
+                        novos_poligonos.append(coords_corrigidas)
+                        
+            # Só dispara o rerun se a mudança geométrica for real e diferente da memória atual
+            if novos_poligonos and novos_poligonos != st.session_state.poligonos_finais:
+                st.session_state.poligonos_finais = novos_poligonos
+                st.rerun()
