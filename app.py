@@ -99,8 +99,8 @@ def vetorizar_casas(img_data, limites):
     try:
         # 2. Inicializa o Modelo de IA Segment Anything (SAM)
         sam = SamGeo(
-            model_type="vit_l",
-            checkpoint="sam_vit_l_0b3195.pth",
+            model_type="vit_b",
+            checkpoint="sam_vit_b_01ec64.pth",
             sam_kwargs=None
         )
         
