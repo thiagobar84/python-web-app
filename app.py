@@ -69,13 +69,13 @@ def processar_ortofoto(caminho_imagem):
         
     return img_data, [south, west, north, east]
 
-from samgeo import SamGeo
+from samgeo import SamGeoMobile
 
 def vetorizar_casas(img_data, limites):
     south, west, north, east = limites
     img_temp_path = "temp_para_ia.tif"
     
-    # Redimensiona a imagem para a IA evitar estouro de RAM
+    # Redimensiona a imagem para a IA evitar estouro de RAM no servidor gratuito
     img_ia = cv2.resize(img_data, (600, 600), interpolation=cv2.INTER_AREA)
     
     with rasterio.open(
@@ -96,11 +96,9 @@ def vetorizar_casas(img_data, limites):
     output_gpkg = "temp_casas_sam.gpkg"
     
     try:
-        # Inicializa a versão Mobile do SAM (Ultra leve para o Streamlit Cloud)
-        sam = SamGeo(
-            model_type="vit_t",
-            checkpoint="mobile_sam.pt",
-            sam_kwargs=None
+        # Inicializa a versão correta do MobileSAM (Consome apenas ~40MB)
+        sam = SamGeoMobile(
+            checkpoint="mobile_sam.pt"
         )
         
         # Executa a geração com parâmetros econômicos de memória
@@ -121,7 +119,7 @@ def vetorizar_casas(img_data, limites):
             for geom in gdf_sam.geometry:
                 if geom.geom_type == 'Polygon':
                     coords = list(geom.exterior.coords)
-                    coords_folium = [[pt[1], pt[0]] for pt in coords]
+                    coords_folium = [[pt[1], pt[0]] for pt in coords] # Ajustado ordem Lat, Lon
                     poligonos_geo.append(coords_folium)
                 elif geom.geom_type == 'MultiPolygon':
                     for parte in geom.geoms:
