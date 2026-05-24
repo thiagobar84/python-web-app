@@ -97,14 +97,21 @@ def vetorizar_casas(img_data, limites):
     output_gpkg = "temp_casas_sam.gpkg"
     
     try:
-        sam = SamGeo(
-            model_type="vit_b",
-            checkpoint="sam_vit_b_01ec64.pth",
+       sam = SamGeo(
+            model_type="vit_t",
+            checkpoint="mobile_sam.pt",
             sam_kwargs=None
         )
         
         # Configuração ultra leve para rodar no servidor gratuito
-        sam.generate(img_temp_path, output=mask_tiff, erosion_kernel=(3, 3), grid_percentage=400)
+     # Executa a geração com parâmetros de amostragem reduzidos
+        sam.generate(
+            img_temp_path, 
+            output=mask_tiff, 
+            erosion_kernel=(3, 3), 
+            grid_percentage=100,  # Reduzido para diminuir uso de CPU/RAM
+            points_per_side=8     # Menos pontos de varredura simultâneos
+        )
         
         if os.path.exists(mask_tiff):
             sam.tiff_to_gpkg(mask_tiff, output_gpkg, simplify_tolerance=None)
