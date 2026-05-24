@@ -164,7 +164,7 @@ with col2:
             if st.session_state.poligonos_detectados:
                 for index, poli in enumerate(st.session_state.poligonos_detectados):
                     folium.Polygon(
-                        locations=poli,
+                        locations=poli,  # 🏢 CORRIGIDO: mudado de polyline para poli
                         color="red",
                         weight=2,
                         fill=True,
@@ -209,7 +209,13 @@ with col2:
                     except Exception as exp_error:
                         st.error(f"Erro ao gerar shapefile: {exp_error}")
 
+            # Renderiza o mapa com a ortofoto
             st_folium(m, width="100%", height=600, returned_objects=[])
 
         except Exception as e:
             st.error(f"Erro ao renderizar dados geográficos: {e}")
+            
+    else:
+        # 🗺️ ADICIONADO: Mostra um mapa vazio inicial antes do upload do arquivo
+        m_inicial = folium.Map(location=[-15.7801, -47.9292], zoom_start=4, control_scale=True)
+        st_folium(m_inicial, width="100%", height=600, returned_objects=[])
