@@ -7,9 +7,10 @@ import os
 import numpy as np
 import cv2
 from shapely.geometry import Polygon
+import gpd as gpd  # Corrigido alias padrão geopandas
 import geopandas as gpd
 import zipfile
-import gc  # Importado para forçar a liberação de memória RAM
+import gc
 
 # Configuração da página do Streamlit
 st.set_page_config(layout="wide", page_title="Visualizador de Ortofotos")
@@ -43,10 +44,9 @@ with col1:
     # Botão para ativar a vetorização por IA
     rodar_ia = st.button("🤖 Executar IA de Vetorização")
 
-# --- FUNÇÃO TRATAMENTO DA IMAGEM OTIMIZADA ---
+# --- FUNÇÃO TRATAMENTO DA IMAGEM ---
 def processar_ortofoto(caminho_imagem):
     with rasterio.open(caminho_imagem) as src:
-        # Fator 4x garante estabilidade no limite de 1GB de RAM do servidor gratuito
         fator_reducao = 4
         
         img_data = src.read(
@@ -55,7 +55,6 @@ def processar_ortofoto(caminho_imagem):
         )
         img_data = np.moveaxis(img_data, 0, -1)
         
-        # Ajusta contraste por percentil de forma eficiente na memória
         img_valida = img_data[img_data > 0]
         if len(img_valida) > 0:
             p_max = np.percentile(img_valida, 98)
@@ -65,7 +64,6 @@ def processar_ortofoto(caminho_imagem):
         else:
             img_data = img_data.astype(np.uint8)
             
-        # Converte as coordenadas do arquivo para Lat/Lon (WGS84)
         bounds = src.bounds
         crs = src.crs
         west, south, east, north = transform_bounds(crs, 'EPSG:4326', *bounds)
@@ -73,13 +71,11 @@ def processar_ortofoto(caminho_imagem):
     return img_data, [south, west, north, east]
 
 
-# --- FUNÇÃO DE IA PARA DETECTAR CONTORNOS OTIMIZADA ---
+# --- FUNÇÃO DE IA PARA DETECTAR CONTORNOS ---
 from samgeo import SamGeo
 
 def vetorizar_casas(img_data, limites):
     south, west, north, east = limites
-    
-    # 1. Salva a ortofoto temporariamente em formato TIF local para a IA ler
     img_temp_path = "temp_para_ia.tif"
     
     with rasterio.open(
@@ -93,34 +89,28 @@ def vetorizar_casas(img_data, limites):
             dst.write(img_data[:, :, i], i + 1)
 
     poligonos_geo = []
-    
-    # Nomes dos arquivos temporários seguindo o fluxo oficial da biblioteca
     mask_tiff = "temp_resultado_ia.tif"
     output_gpkg = "temp_casas_sam.gpkg"
     
     try:
-        # 2. Inicializa o Modelo de IA Segment Anything (SAM) - Versão Base (Leve)
         sam = SamGeo(
             model_type="vit_b",
             checkpoint="sam_vit_b_01ec64.pth",
             sam_kwargs=None
         )
         
-        # 3. PASSO CORRETO: IA gera a máscara raster (.tif) primeiro
         sam.generate(img_temp_path, output=mask_tiff, erosion_kernel=(3, 3), grid_percentage=200)
         
-        # 4. PASSO CORRETO: Converte a máscara .tif para o vetor GeoPackage (.gpkg)
         if os.path.exists(mask_tiff):
             sam.tiff_to_gpkg(mask_tiff, output_gpkg, simplify_tolerance=None)
         
-        # 5. Lê o GeoPackage gerado e extrai as coordenadas para o Folium
         if os.path.exists(output_gpkg):
             gdf_sam = gpd.read_file(output_gpkg)
             
             for geom in gdf_sam.geometry:
                 if geom.geom_type == 'Polygon':
                     coords = list(geom.exterior.coords)
-                    coords_folium = [[pt[1], pt[0]] for pt in coords] # Garante Lat, Lon
+                    coords_folium = [[pt[1], pt[0]] for pt in coords]
                     poligonos_geo.append(coords_folium)
                 elif geom.geom_type == 'MultiPolygon':
                     for parte in geom.geoms:
@@ -132,14 +122,12 @@ def vetorizar_casas(img_data, limites):
         st.error(f"Erro no processamento do SAM: {sam_error}")
         
     finally:
-        # Faxina estrita: deleta os arquivos temporários e força esvaziamento da RAM
         for arquivo in [img_temp_path, mask_tiff, output_gpkg]:
             if os.path.exists(arquivo):
                 try:
                     os.remove(arquivo)
                 except:
                     pass
-        # Libera buffers de memória acumulados pelo PyTorch/NumPy
         gc.collect()
             
     return poligonos_geo
@@ -147,7 +135,6 @@ def vetorizar_casas(img_data, limites):
 with col2:
     if arquivo_path:
         try:
-            # O spinner roda apenas no primeiro processamento do arquivo
             with st.spinner("⏳ Processando ortofoto e extraindo metadados... Por favor, aguarde."):
                 img_data, limites = processar_ortofoto(arquivo_path)
             
@@ -157,10 +144,8 @@ with col2:
             centro_lat = (south + north) / 2
             centro_lon = (west + east) / 2
             
-            # Inicializa o mapa focado na ortofoto
             m = folium.Map(location=[centro_lat, centro_lon], zoom_start=16, control_scale=True)
             
-            # Renderiza a ortofoto como camada
             folium.raster_layers.ImageOverlay(
                 image=img_data,
                 bounds=[[south, west], [north, east]],
@@ -168,21 +153,18 @@ with col2:
                 name="Ortofoto"
             ).add_to(m)
 
-            # Inicializa a memória do Streamlit para manter os polígonos visíveis
             if "poligonos_detectados" not in st.session_state:
                 st.session_state.poligonos_detectados = []
 
-            # Se o usuário clicar para rodar a IA
             if rodar_ia:
                 with st.spinner("🤖 IA analisando texturas e vetorizando telhados..."):
                     st.session_state.poligonos_detectados = vetorizar_casas(img_data, limites)
                 st.sidebar.success(f"🤖 IA identificou {len(st.session_state.poligonos_detectados)} estruturas!")
 
-            # Desenha os polígonos se eles existirem na memória
             if st.session_state.poligonos_detectados:
                 for index, poli in enumerate(st.session_state.poligonos_detectados):
                     folium.Polygon(
-                        locations=polyline, # Corrigido escopo interno se necessário, usando variável poli
+                        locations=poli,
                         color="red",
                         weight=2,
                         fill=True,
@@ -191,7 +173,6 @@ with col2:
                         popup=f"Construção {index+1}"
                     ).add_to(m)
 
-                # --- EXPORTAÇÃO PARA SHAPEFILE DENTRO DA COLUNA 1 (Trecho Concluído) ---
                 with col1:
                     st.write("---")
                     st.subheader("Exportar Vetores")
@@ -199,7 +180,6 @@ with col2:
                     try:
                         lista_shapely = []
                         for poli in st.session_state.poligonos_detectados:
-                            # Inverte a ordem de [Lat, Lon] (Folium) para [Lon, Lat] (Padrão GIS)
                             coordenadas_gis = [(pt[1], pt[0]) for pt in poli]
                             if len(coordenadas_gis) >= 3:
                                 lista_shapely.append(Polygon(coordenadas_gis))
@@ -207,7 +187,6 @@ with col2:
                         if lista_shapely:
                             gdf_export = gpd.GeoDataFrame(geometry=lista_shapely, crs="EPSG:4326")
                             
-                            # Caminhos para gerar o Shapefile compactado em ZIP
                             pasta_shapefile = "vetores_ia"
                             os.makedirs(pasta_shapefile, exist_ok=True)
                             base_nome = os.path.join(pasta_shapefile, "casas_detectadas")
@@ -220,7 +199,6 @@ with col2:
                                     if os.path.exists(f"{base_nome}{ext}"):
                                         zipf.write(f"{base_nome}{ext}", f"casas_detectadas{ext}")
                             
-                            # Botão de download para o usuário baixar o ZIP pronto
                             with open(zip_path, "rb") as fp:
                                 st.download_button(
                                     label="📥 Baixar Vetores em Shapefile (ZIP)",
@@ -229,3 +207,9 @@ with col2:
                                     mime="application/zip"
                                 )
                     except Exception as exp_error:
+                        st.error(f"Erro ao gerar shapefile: {exp_error}")
+
+            st_folium(m, width="100%", height=600, returned_objects=[])
+
+        except Exception as e:
+            st.error(f"Erro ao renderizar dados geográficos: {e}")
