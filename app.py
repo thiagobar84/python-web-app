@@ -75,8 +75,7 @@ def vetorizar_casas(img_data, limites):
     south, west, north, east = limites
     img_temp_path = "temp_para_ia.tif"
     
-    # Redimensiona agressivamente a imagem que vai para a IA para evitar estouro de RAM (OOM)
-    # 600x600 pixels é o limite ideal para rodar no plano gratuito do Streamlit
+    # Redimensiona a imagem para a IA evitar estouro de RAM
     img_ia = cv2.resize(img_data, (600, 600), interpolation=cv2.INTER_AREA)
     
     with rasterio.open(
@@ -97,20 +96,20 @@ def vetorizar_casas(img_data, limites):
     output_gpkg = "temp_casas_sam.gpkg"
     
     try:
-       sam = SamGeo(
+        # Inicializa a versão Mobile do SAM (Ultra leve para o Streamlit Cloud)
+        sam = SamGeo(
             model_type="vit_t",
             checkpoint="mobile_sam.pt",
             sam_kwargs=None
         )
         
-        # Configuração ultra leve para rodar no servidor gratuito
-     # Executa a geração com parâmetros de amostragem reduzidos
+        # Executa a geração com parâmetros econômicos de memória
         sam.generate(
             img_temp_path, 
             output=mask_tiff, 
             erosion_kernel=(3, 3), 
-            grid_percentage=100,  # Reduzido para diminuir uso de CPU/RAM
-            points_per_side=8     # Menos pontos de varredura simultâneos
+            grid_percentage=100,
+            points_per_side=8
         )
         
         if os.path.exists(mask_tiff):
@@ -143,6 +142,7 @@ def vetorizar_casas(img_data, limites):
         gc.collect()
             
     return poligonos_geo
+
 
 with col2:
     if arquivo_path:
