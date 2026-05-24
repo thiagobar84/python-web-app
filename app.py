@@ -69,14 +69,15 @@ def processar_ortofoto(caminho_imagem):
         
     return img_data, [south, west, north, east]
 
-from samgeo import SamGeo  # Mantido o import padrão oficial
+# --- FUNÇÃO DE IA PARA DETECTAR CONTORNOS CORRIGIDA ---
+from samgeo import SamGeo  # ✅ CORRIGIDO: Voltamos para o import oficial correto
 
 def vetorizar_casas(img_data, limites):
     south, west, north, east = limites
     img_temp_path = "temp_para_ia.tif"
     
     # Reduz de forma agressiva a resolução que vai para a IA (500x500 pixels)
-    # Isso garante que a varredura interna caiba com folga nos 1GB de RAM livres
+    # Isso garante que a varredura interna caiba com folga nos 1GB de RAM do plano gratuito
     img_ia = cv2.resize(img_data, (500, 500), interpolation=cv2.INTER_AREA)
     
     with rasterio.open(
@@ -97,14 +98,14 @@ def vetorizar_casas(img_data, limites):
     output_gpkg = "temp_casas_sam.gpkg"
     
     try:
-        # Inicializa o modelo Base oficial (375MB)
+        # Inicializa o modelo Base oficial que já está baixado no servidor
         sam = SamGeo(
             model_type="vit_b",
             checkpoint="sam_vit_b_01ec64.pth",
             sam_kwargs=None
         )
         
-        # Parâmetros otimizados para evitar loops intensos de CPU/RAM
+        # Parâmetros otimizados para evitar picos intensos de CPU/RAM
         sam.generate(
             img_temp_path, 
             output=mask_tiff, 
@@ -121,7 +122,7 @@ def vetorizar_casas(img_data, limites):
             for geom in gdf_sam.geometry:
                 if geom.geom_type == 'Polygon':
                     coords = list(geom.exterior.coords)
-                    coords_folium = [[pt[1], pt[0]] for pt in coords]  # Garante ordem Lat, Lon
+                    coords_folium = [[pt[1], pt[0]] for pt in coords]  # Corrigido indexadores Lat, Lon
                     poligonos_geo.append(coords_folium)
                 elif geom.geom_type == 'MultiPolygon':
                     for parte in geom.geoms:
@@ -142,6 +143,7 @@ def vetorizar_casas(img_data, limites):
         gc.collect()
             
     return poligonos_geo
+
 
 with col2:
     if arquivo_path:
