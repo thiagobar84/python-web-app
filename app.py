@@ -44,23 +44,25 @@ with col1:
     rodar_ia = st.button("🤖 Executar IA de Vetorização")
 
 # --- FUNÇÃO COM CACHE PARA TRATAMENTO DA IMAGEM ---
-@st.cache_data(show_spinner=False)
+# REMOVIDO: @st.cache_data(show_spinner=False)
 def processar_ortofoto(caminho_imagem):
     with rasterio.open(caminho_imagem) as src:
-        # Reduz a resolução em 2x para garantir performance fluida no navegador
-        fator_reducao = 2
+        # Aumentamos para 4x para garantir estabilidade no limite de 1GB de RAM do servidor
+        fator_reducao = 4
+        
         img_data = src.read(
-            out_shape=(src.count, int(src.height / fator_reducao), int(src.width / fator_reducao))
+            out_shape=(src.count, int(src.height / fator_reducao), int(src.width / fator_reducao)),
+            resampling=rasterio.enums.Resampling.bilinear
         )
         img_data = np.moveaxis(img_data, 0, -1)
         
-        # Ignora valores sem dados (pretos das bordas) e ajusta contraste por percentil
+        # Ajusta contraste por percentil de forma eficiente na memória
         img_valida = img_data[img_data > 0]
         if len(img_valida) > 0:
             p_max = np.percentile(img_valida, 98)
             p_min = np.percentile(img_valida, 2)
             img_data = np.clip(img_data, p_min, p_max)
-            img_data = ((img_data - p_min) / (p_max - p_min) * 255).astype(np.uint8)
+            img_data = ((img_data - p_min) / (max(1, p_max - p_min)) * 255).astype(np.uint8)
         else:
             img_data = img_data.astype(np.uint8)
             
@@ -70,6 +72,7 @@ def processar_ortofoto(caminho_imagem):
         west, south, east, north = transform_bounds(crs, 'EPSG:4326', *bounds)
         
     return img_data, [south, west, north, east]
+
 
 # --- FUNÇÃO DE IA PARA DETECTAR CONTORNOS E CONVERTER EM LAT/LON ---
 from samgeo import SamGeo
