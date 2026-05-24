@@ -7,16 +7,16 @@ import os
 import numpy as np
 import cv2
 from shapely.geometry import Polygon
-import geopandas  as gpd  # Corrigido alias padrão geopandas
 import geopandas as gpd
 import zipfile
 import gc
 
-# Configuração da página do Streamlit
+# Força o PyTorch (usado pelo SAM) a operar com o mínimo de memória possível
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:32"
+
 st.set_page_config(layout="wide", page_title="Visualizador de Ortofotos")
 st.title("🗺️ Visualizador Web de Ortofotos com IA")
 
-# CSS para travar a opacidade e evitar o efeito escuro chato ao interagir com o mapa
 st.markdown(
     """
     <style>
@@ -28,26 +28,24 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Cria duas colunas: coluna 1 (peso 1) para controles, coluna 2 (peso 3) para o mapa maior
 col1, col2 = st.columns([1, 3])
-
-arquivo_path = None
+arquivo_path = "temp_ortofoto.tif" if os.path.exists("temp_ortofoto.tif") else None
 
 with col1:
     st.header("Painel de Controle")
     arquivo_subido = st.file_uploader("Suba sua ortofoto (.tif ou .tiff)", type=["tif", "tiff"])
     if arquivo_subido is not None:
-        arquivo_path = os.path.join("temp_ortofoto.tif")
+        arquivo_path = "temp_ortofoto.tif"
         with open(arquivo_path, "wb") as f:
             f.write(arquivo_subido.getbuffer())
     
-    # Botão para ativar a vetorização por IA
     rodar_ia = st.button("🤖 Executar IA de Vetorização")
 
-# --- FUNÇÃO TRATAMENTO DA IMAGEM ---
 def processar_ortofoto(caminho_imagem):
     with rasterio.open(caminho_imagem) as src:
-        fator_reducao = 4
+        # Fator de redução dinâmico: garante que a imagem caiba perfeitamente no servidor
+        max_dim = max(src.height, src.width)
+        fator_reducao = max(1, max_dim // 800) # Reduz para que a maior dimensão fique próxima a 800px
         
         img_data = src.read(
             out_shape=(src.count, int(src.height / fator_reducao), int(src.width / fator_reducao)),
@@ -55,6 +53,7 @@ def processar_ortofoto(caminho_imagem):
         )
         img_data = np.moveaxis(img_data, 0, -1)
         
+        # Ajuste eficiente de contraste por amostragem para economizar RAM
         img_valida = img_data[img_data > 0]
         if len(img_valida) > 0:
             p_max = np.percentile(img_valida, 98)
@@ -70,23 +69,28 @@ def processar_ortofoto(caminho_imagem):
         
     return img_data, [south, west, north, east]
 
-
-# --- FUNÇÃO DE IA PARA DETECTAR CONTORNOS ---
 from samgeo import SamGeo
 
 def vetorizar_casas(img_data, limites):
     south, west, north, east = limites
     img_temp_path = "temp_para_ia.tif"
     
+    # Redimensiona agressivamente a imagem que vai para a IA para evitar estouro de RAM (OOM)
+    # 600x600 pixels é o limite ideal para rodar no plano gratuito do Streamlit
+    img_ia = cv2.resize(img_data, (600, 600), interpolation=cv2.INTER_AREA)
+    
     with rasterio.open(
         img_temp_path, 'w', driver='GTiff',
-        height=img_data.shape[0], width=img_data.shape[1],
-        count=3, dtype=img_data.dtype,
+        height=img_ia.shape[0], width=img_ia.shape[1],
+        count=3, dtype=img_ia.dtype,
         crs="EPSG:4326",
-        transform=rasterio.transform.from_bounds(west, south, east, north, img_data.shape[1], img_data.shape[0])
+        transform=rasterio.transform.from_bounds(west, south, east, north, img_ia.shape[1], img_ia.shape[0])
     ) as dst:
         for i in range(3):
-            dst.write(img_data[:, :, i], i + 1)
+            dst.write(img_ia[:, :, i], i + 1)
+
+    del img_ia
+    gc.collect()
 
     poligonos_geo = []
     mask_tiff = "temp_resultado_ia.tif"
@@ -99,7 +103,8 @@ def vetorizar_casas(img_data, limites):
             sam_kwargs=None
         )
         
-        sam.generate(img_temp_path, output=mask_tiff, erosion_kernel=(3, 3), grid_percentage=200)
+        # Configuração ultra leve para rodar no servidor gratuito
+        sam.generate(img_temp_path, output=mask_tiff, erosion_kernel=(3, 3), grid_percentage=400)
         
         if os.path.exists(mask_tiff):
             sam.tiff_to_gpkg(mask_tiff, output_gpkg, simplify_tolerance=None)
@@ -138,13 +143,13 @@ with col2:
             with st.spinner("⏳ Processando ortofoto e extraindo metadados... Por favor, aguarde."):
                 img_data, limites = processar_ortofoto(arquivo_path)
             
-            st.success("✅ Ortofoto carregada e processada com sucesso!")
+            st.success("✅ Ortofoto carregada com sucesso!")
             
             south, west, north, east = limites
             centro_lat = (south + north) / 2
             centro_lon = (west + east) / 2
             
-            m = folium.Map(location=[centro_lat, centro_lon], zoom_start=16, control_scale=True)
+            m = folium.Map(location=[centro_lat, centro_lon], zoom_start=17, control_scale=True)
             
             folium.raster_layers.ImageOverlay(
                 image=img_data,
@@ -157,14 +162,14 @@ with col2:
                 st.session_state.poligonos_detectados = []
 
             if rodar_ia:
-                with st.spinner("🤖 IA analisando texturas e vetorizando telhados..."):
+                with st.spinner("🤖 IA analisando texturas e vetorizando..."):
                     st.session_state.poligonos_detectados = vetorizar_casas(img_data, limites)
                 st.sidebar.success(f"🤖 IA identificou {len(st.session_state.poligonos_detectados)} estruturas!")
 
             if st.session_state.poligonos_detectados:
                 for index, poli in enumerate(st.session_state.poligonos_detectados):
                     folium.Polygon(
-                        locations=poli,  # 🏢 CORRIGIDO: mudado de polyline para poli
+                        locations=poli,
                         color="red",
                         weight=2,
                         fill=True,
@@ -186,7 +191,6 @@ with col2:
                         
                         if lista_shapely:
                             gdf_export = gpd.GeoDataFrame(geometry=lista_shapely, crs="EPSG:4326")
-                            
                             pasta_shapefile = "vetores_ia"
                             os.makedirs(pasta_shapefile, exist_ok=True)
                             base_nome = os.path.join(pasta_shapefile, "casas_detectadas")
@@ -209,13 +213,11 @@ with col2:
                     except Exception as exp_error:
                         st.error(f"Erro ao gerar shapefile: {exp_error}")
 
-            # Renderiza o mapa com a ortofoto
             st_folium(m, width="100%", height=600, returned_objects=[])
 
         except Exception as e:
             st.error(f"Erro ao renderizar dados geográficos: {e}")
             
     else:
-        # 🗺️ ADICIONADO: Mostra um mapa vazio inicial antes do upload do arquivo
         m_inicial = folium.Map(location=[-15.7801, -47.9292], zoom_start=4, control_scale=True)
         st_folium(m_inicial, width="100%", height=600, returned_objects=[])
