@@ -171,79 +171,88 @@ with col1:
     # 3. UPLOADER AUTOMÁTICO DE SHAPEFILE (SEM BOTÕES INTERMEDIÁRIOS)
     st.write("---")
     st.subheader("Importar Shapefile")
-    arquivos_shape = st.file_uploader(
-        "Arraste os arquivos do Shapefile juntos (.shp, .shx, .dbf, .prj)", 
-        type=["shp", "shx", "dbf", "prj"], 
-        accept_multiple_files=True,
-        key="importador_automatico_shp"
-    )
     
-    if arquivos_shape:
-        assinatura_atual = "".join([f"{f.name}_{f.size}" for f in arquivos_shape])
-        tem_shp = any(arq.name.endswith('.shp') for arq in arquivos_shape)
+    # Criamos uma função isolada com st.fragment para o uploader não rodar sozinho ao limpar
+    @st.fragment
+    def renderizar_uploader_shapefile():
+        arquivos_shape = st.file_uploader(
+            "Arraste os arquivos do Shapefile juntos (.shp, .shx, .dbf, .prj)", 
+            type=["shp", "shx", "dbf", "prj"], 
+            accept_multiple_files=True,
+            key="importador_automatico_shp"
+        )
         
-        if tem_shp and st.session_state.ultimo_shp_carregado != assinatura_atual:
-            with st.spinner("⏳ Lendo e projetando vetores automaticamente..."):
-                try:
-                    pasta_temp = "temp_shp_direto"
-                    os.makedirs(pasta_temp, exist_ok=True)
-                    shp_nome_completo = ""
-                    
-                    for arq in arquivos_shape:
-                        caminho_salvamento = os.path.join(pasta_temp, arq.name)
-                        with open(caminho_salvamento, "wb") as f:
-                            f.write(arq.getbuffer())
-                        if arq.name.endswith('.shp'):
-                            shp_nome_completo = caminho_salvamento
-                    
-                    gdf_importado = gpd.read_file(shp_nome_completo)
-                    if gdf_importado.crs is not None and gdf_importado.crs != "EPSG:4326":
-                        gdf_importado = gdf_importado.to_crs("EPSG:4326")
-                    
-                    poligonos_importados = []
-                    lats, lons = [], []
-                    
-                    for geom in gdf_importado.geometry:
-                        if geom is not None:
-                            if geom.geom_type == 'Polygon':
-                                coords = list(geom.exterior.coords)
-                                coords_folium = [[float(pt[1]), float(pt[0])] for pt in coords]
-                                poligonos_importados.append(coords_folium)
-                                lats.extend([pt[1] for pt in coords])
-                                lons.extend([pt[0] for pt in coords])
-                            elif geom.geom_type == 'MultiPolygon':
-                                for parte in geom.geoms:
-                                    coords = list(parte.exterior.coords)
+        if arquivos_shape:
+            assinatura_atual = "".join([f"{f.name}_{f.size}" for f in arquivos_shape])
+            tem_shp = any(arq.name.endswith('.shp') for arq in arquivos_shape)
+            
+            if tem_shp and st.session_state.ultimo_shp_carregado != assinatura_atual:
+                with st.spinner("⏳ Lendo e projetando vetores automaticamente..."):
+                    try:
+                        pasta_temp = "temp_shp_direto"
+                        os.makedirs(pasta_temp, exist_ok=True)
+                        shp_nome_completo = ""
+                        
+                        for arq in arquivos_shape:
+                            caminho_salvamento = os.path.join(pasta_temp, arq.name)
+                            with open(caminho_salvamento, "wb") as f:
+                                f.write(arq.getbuffer())
+                            if arq.name.endswith('.shp'):
+                                shp_nome_completo = caminho_salvamento
+                        
+                        gdf_importado = gpd.read_file(shp_nome_completo)
+                        if gdf_importado.crs is not None and gdf_importado.crs != "EPSG:4326":
+                            gdf_importado = gdf_importado.to_crs("EPSG:4326")
+                        
+                        poligonos_importados = []
+                        lats, lons = [], []
+                        
+                        for geom in gdf_importado.geometry:
+                            if geom is not None:
+                                if geom.geom_type == 'Polygon':
+                                    coords = list(geom.exterior.coords)
                                     coords_folium = [[float(pt[1]), float(pt[0])] for pt in coords]
                                     poligonos_importados.append(coords_folium)
                                     lats.extend([pt[1] for pt in coords])
                                     lons.extend([pt[0] for pt in coords])
-                    
-                    # Centraliza se não houver imagem de fundo carregada
-                    if lats and lons and st.session_state.img_data is None:
-                        st.session_state.centro_mapa = [sum(lats) / len(lats), sum(lons) / len(lons)]
-                        st.session_state.zoom_mapa = 16
-                    
-                    st.session_state.poligonos_finais.extend(poligonos_importados)
-                    st.session_state.ultimo_shp_carregado = assinatura_atual
-                    
-                    for arq in arquivos_shape:
-                        try: os.remove(os.path.join(pasta_temp, arq.name))
+                                elif geom.geom_type == 'MultiPolygon':
+                                    for parte in geom.geoms:
+                                        coords = list(parte.exterior.coords)
+                                        coords_folium = [[float(pt[1]), float(pt[0])] for pt in coords]
+                                        poligonos_importados.append(coords_folium)
+                                        lats.extend([pt[1] for pt in coords])
+                                        lons.extend([pt[0] for pt in coords])
+                        
+                        if lats and lons and st.session_state.img_data is None:
+                            st.session_state.centro_mapa = [sum(lats) / len(lats), sum(lons) / len(lons)]
+                            st.session_state.zoom_mapa = 16
+                        
+                        st.session_state.poligonos_finais.extend(poligonos_importados)
+                        st.session_state.ultimo_shp_carregado = assinatura_atual
+                        
+                        for arq in arquivos_shape:
+                            try: os.remove(os.path.join(pasta_temp, arq.name))
+                            except: pass
+                        try: os.rmdir(pasta_temp)
                         except: pass
-                    try: os.rmdir(pasta_temp)
-                    except: pass
-                    
-                    st.success(f"📁 {len(poligonos_importados)} vetores importados automaticamente!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao processar Shapefile: {e}")
+                        
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao processar Shapefile: {e}")
+            elif not tem_shp:
+                st.warning("⚠️ Certifique-se de incluir o arquivo **.shp** na seleção.")
 
-    # 4. BOTÃO DE RESET E EXPORTAÇÃO
+    # Executa o uploader fragmentado na tela
+    renderizar_uploader_shapefile()
+
+    # 4. BOTÃO DE RESET E EXPORTAÇÃO (Roda fora do fragmento para limpar tudo com segurança)
     if st.session_state.poligonos_finais:
         st.write("---")
-        if st.button("🗑️ Limpar Todos os Vetores"):
+        
+        if st.button("🗑️ Limpar Todos os Vetores", type="secondary"):
             st.session_state.poligonos_finais = []
-            st.session_state.ultimo_shp_carregado = None
+            st.session_state.ultimo_shp_carregado = "limpo" # Trava para ignorar o uploader antigo
+            st.success("🧹 Todos os vetores foram limpos!")
             st.rerun()
             
         st.subheader("Exportar Vetores")
@@ -279,11 +288,12 @@ with col1:
             st.error(f"Erro ao gerar shapefile: {exp_error}")
 
 # --- MAPA DE EXIBIÇÃO (COLUNA 2) ---
-# --- MAPA DE EXIBIÇÃO (COLUNA 2) ---
 with col2:
+    
+    # 1. Instancia o mapa base apontando para a coordenada atual da sessão
     m = folium.Map(location=st.session_state.centro_mapa, zoom_start=st.session_state.zoom_mapa, control_scale=True)
     
-    # Adiciona a imagem de fundo caso ela tenha sido enviada
+    # 2. Renderiza a imagem da ortofoto se ela já foi subida pelo usuário
     if arquivo_path and st.session_state.limites is not None:
         south, west, north, east = st.session_state.limites
         folium.raster_layers.ImageOverlay(
@@ -293,51 +303,67 @@ with col2:
             name="Ortofoto"
         ).add_to(m)
     
-    # Plota a camada vetorial ativa (combinação de IA + Importados + Desenho Manual)
-    fg = folium.FeatureGroup(name="Camada Vetorial")
+    # 3. CONVERSÃO ESTÁVEL PARA GEOJSON PURO
+    # Usar GeoJson nativo garante que o mapa abra os popups sem nenhuma trepidação ou lentidão
+    recursos_geojson = []
     for index, poli in enumerate(st.session_state.poligonos_finais):
-        folium.Polygon(
-            locations=poli, color="red", weight=2, fill=True,
-            fill_color="red", fill_opacity=0.4, popup=f"Estrutura {index+1}"
-        ).add_to(fg)
-    fg.add_to(m)
+        coords_geojson = [[float(pt[1]), float(pt[0])] for pt in poli]
+        # Garante o fechamento do anel do polígono exigido pelo padrão OGC / GeoJSON
+        if coords_geojson and coords_geojson[0] != coords_geojson[-1]:
+            coords_geojson.append(coords_geojson[0])
+            
+        recursos_geojson.append({
+            "type": "Feature",
+            "properties": {
+                "id": index + 1, 
+                "popup": f"Construção #{index + 1}",
+                "vertices": len(poli)
+            },
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [coords_geojson]
+            }
+        })
     
-    # Ativa a barra de edição no mapa se existirem dados na tela
+    colecao_geojson = {
+        "type": "FeatureCollection",
+        "features": recursos_geojson if st.session_state.poligonos_finais else []
+    }
+
+    # 4. Injeta os polígonos coloridos e com os modais de identificação configurados
     if st.session_state.poligonos_finais:
-        draw = Draw(
-            export=False,
-            draw_options={'polyline': False, 'circle': False, 'marker': False, 'circlemarker': False, 'rectangle': True, 'polygon': True},
-            edit_options={'poly': {'allowIntersection': False}, 'edit': True, 'remove': True}
-        )
-        draw.add_to(m)
+        folium.GeoJson(
+            colecao_geojson,
+            name="Estruturas Vetorizadas",
+            # Adiciona o modal/popup que abre ao clicar na geometria
+            popup=folium.GeoJsonPopup(
+                fields=["popup", "vertices"],
+                aliases=["Estrutura:", "Total de Vértices:"],
+                labels=True,
+                style="font-family: Arial; font-size: 13px; min-width: 130px;"
+            ),
+            # Adiciona um efeito visual de destaque ao passar o mouse por cima do polígono
+            highlight_function=lambda x: {
+                'weight': 4,
+                'color': "#00ff62",
+                'fillOpacity': 0.9
+            },
+            # Estilização padrão (Vermelho semi-transparente)
+            style_function=lambda x: {
+                'color': 'red',
+                'weight': 2,
+                'fillColor': 'red',
+                'fillOpacity': 0.35
+            }
+        ).add_to(m)
         
-    # Renderiza o mapa capturando o status dos desenhos e a última ação realizada
-    output_mapa = st_folium(
+        st.sidebar.success(f"🗺️ {len(st.session_state.poligonos_finais)} estruturas carregadas no visualizador.")
+
+    # 5. Renderiza o mapa final na tela de forma estritamente estável (returned_objects vazio para não dar rerun)
+    st_folium(
         m, 
-        width="100%", 
+        use_container_width=True, 
         height=650, 
-        key="mapa_dinamico", 
-        returned_objects=["all_drawings", "last_active_drawing"]
+        key="mapa_visualizador_puro",
+        returned_objects=[] # Garante que clicar no mapa ou no modal nunca pisque a tela
     )
-    
-    # ✅ LÓGICA BLINDADA CONTRA CLIQUES DE POPUP
-    if output_mapa and output_mapa.get("all_drawings") is not None:
-        last_action = output_mapa.get("last_active_drawing", {})
-        
-        # Só atualiza a memória se houver uma ação geométrica real na tela (Draw, Edit, Delete)
-        # Se 'last_action' for None ou não contiver propriedades de desenho, ignora o clique do popup
-        if last_action and "geometry" in last_action:
-            novos_poligonos = []
-            for desenho in output_mapa["all_drawings"]:
-                if "geometry" in desenho and desenho["geometry"]["type"] == "Polygon":
-                    coords_raw = desenho["geometry"]["coordinates"]
-                    if coords_raw:
-                        # ✅ CORRIGIDO: Coleta do anel externo [0] para o padrão Folium [Lat, Lon]
-                        anel_externo = coords_raw[0]
-                        coords_corrigidas = [[float(pt[1]), float(pt[0])] for pt in anel_externo]
-                        novos_poligonos.append(coords_corrigidas)
-                        
-            # Só dispara o rerun se a mudança geométrica for real e diferente da memória atual
-            if novos_poligonos and novos_poligonos != st.session_state.poligonos_finais:
-                st.session_state.poligonos_finais = novos_poligonos
-                st.rerun()
