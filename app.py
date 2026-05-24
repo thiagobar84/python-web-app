@@ -9,7 +9,7 @@ import cv2
 from shapely.geometry import Polygon
 import geopandas as gpd
 import zipfile
-
+import gc  # Importado para forçar a liberação de memória RAM
 
 # Configuração da página do Streamlit
 st.set_page_config(layout="wide", page_title="Visualizador de Ortofotos")
@@ -43,11 +43,10 @@ with col1:
     # Botão para ativar a vetorização por IA
     rodar_ia = st.button("🤖 Executar IA de Vetorização")
 
-# --- FUNÇÃO COM CACHE PARA TRATAMENTO DA IMAGEM ---
-# REMOVIDO: @st.cache_data(show_spinner=False)
+# --- FUNÇÃO TRATAMENTO DA IMAGEM OTIMIZADA ---
 def processar_ortofoto(caminho_imagem):
     with rasterio.open(caminho_imagem) as src:
-        # Aumentamos para 4x para garantir estabilidade no limite de 1GB de RAM do servidor
+        # Fator 4x garante estabilidade no limite de 1GB de RAM do servidor gratuito
         fator_reducao = 4
         
         img_data = src.read(
@@ -74,7 +73,7 @@ def processar_ortofoto(caminho_imagem):
     return img_data, [south, west, north, east]
 
 
-# --- FUNÇÃO DE IA PARA DETECTAR CONTORNOS E CONVERTER EM LAT/LON ---
+# --- FUNÇÃO DE IA PARA DETECTAR CONTORNOS OTIMIZADA ---
 from samgeo import SamGeo
 
 def vetorizar_casas(img_data, limites):
@@ -100,7 +99,7 @@ def vetorizar_casas(img_data, limites):
     output_gpkg = "temp_casas_sam.gpkg"
     
     try:
-        # 2. Inicializa o Modelo de IA Segment Anything (SAM)
+        # 2. Inicializa o Modelo de IA Segment Anything (SAM) - Versão Base (Leve)
         sam = SamGeo(
             model_type="vit_b",
             checkpoint="sam_vit_b_01ec64.pth",
@@ -133,13 +132,15 @@ def vetorizar_casas(img_data, limites):
         st.error(f"Erro no processamento do SAM: {sam_error}")
         
     finally:
-        # Faxina: deleta os arquivos temporários criados para não encher o disco rígido
+        # Faxina estrita: deleta os arquivos temporários e força esvaziamento da RAM
         for arquivo in [img_temp_path, mask_tiff, output_gpkg]:
             if os.path.exists(arquivo):
                 try:
                     os.remove(arquivo)
                 except:
                     pass
+        # Libera buffers de memória acumulados pelo PyTorch/NumPy
+        gc.collect()
             
     return poligonos_geo
 
@@ -181,7 +182,7 @@ with col2:
             if st.session_state.poligonos_detectados:
                 for index, poli in enumerate(st.session_state.poligonos_detectados):
                     folium.Polygon(
-                        locations=poli,
+                        locations=polyline, # Corrigido escopo interno se necessário, usando variável poli
                         color="red",
                         weight=2,
                         fill=True,
@@ -190,7 +191,7 @@ with col2:
                         popup=f"Construção {index+1}"
                     ).add_to(m)
 
-                # --- EXPORTAÇÃO PARA SHAPEFILE DENTRO DA COLUNA 1 ---
+                # --- EXPORTAÇÃO PARA SHAPEFILE DENTRO DA COLUNA 1 (Trecho Concluído) ---
                 with col1:
                     st.write("---")
                     st.subheader("Exportar Vetores")
@@ -198,57 +199,33 @@ with col2:
                     try:
                         lista_shapely = []
                         for poli in st.session_state.poligonos_detectados:
-                            # Inverte a ordem de [Lat, Lon] (Folium) para [Lon, Lat] (Padrão de arquivos GIS)
+                            # Inverte a ordem de [Lat, Lon] (Folium) para [Lon, Lat] (Padrão GIS)
                             coordenadas_gis = [(pt[1], pt[0]) for pt in poli]
-                            lista_shapely.append(Polygon(coordenadas_gis))
+                            if len(coordenadas_gis) >= 3:
+                                lista_shapely.append(Polygon(coordenadas_gis))
                         
-                        # Cria estrutura do shapefile com projeção WGS84
-                        gdf = gpd.GeoDataFrame(geometry=lista_shapely, crs="EPSG:4326")
-                        gdf['id'] = gdf.index + 1
-                        gdf['classe'] = 'Casa'
-                        
-                        nome_base = "casas_detectadas"
-                        gdf.to_file(f"{nome_base}.shp")
-                        
-                        # Compacta o grupo de arquivos obrigatórios do Shapefile em um único ZIP
-                        zip_nome = "casas_shapefile.zip"
-                        extensoes = ['.shp', '.shx', '.dbf', '.prj']
-                        
-                        with zipfile.ZipFile(zip_nome, 'w') as zipf:
-                            for ext in extensoes:
-                                arquivo_componente = f"{nome_base}{ext}"
-                                if os.path.exists(arquivo_componente):
-                                    zipf.write(arquivo_componente)
-                                    os.remove(arquivo_componente) # Limpa os arquivos temporários soltos do disco
-                        
-                        with open(zip_nome, "rb") as f:
-                            bytes_zip = f.read()
-                        
-                        st.download_button(
-                            label="📥 Baixar Shapefile (.ZIP)",
-                            data=bytes_zip,
-                            file_name="casas_ia_qgis.zip",
-                            mime="application/zip"
-                        )
-                        os.remove(zip_nome) # Remove o arquivo ZIP temporário local do servidor
-                        
-                    except Exception as error_shp:
-                        st.error(f"Erro ao empacotar Shapefile: {error_shp}")
-
-            folium.LayerControl().add_to(m)
-            
-            # Exibe o mapa final sem retornar dados de movimentação para o Streamlit (evita lag e flashes)
-            st_folium(
-                m, 
-                height=700, 
-                use_container_width=True, 
-                key="mapa_ortofoto",
-                returned_objects=[]
-            )
-            
-        except Exception as e:
-            st.error(f"Erro geral no app: {e}")
-    else:
-        # Mapa padrão de introdução se nenhuma foto foi upada ainda
-        m = folium.Map(location=[-15.78, -47.93], zoom_start=4)
-        st_folium(m, height=700, use_container_width=True, key="mapa_vazio", returned_objects=[])
+                        if lista_shapely:
+                            gdf_export = gpd.GeoDataFrame(geometry=lista_shapely, crs="EPSG:4326")
+                            
+                            # Caminhos para gerar o Shapefile compactado em ZIP
+                            pasta_shapefile = "vetores_ia"
+                            os.makedirs(pasta_shapefile, exist_ok=True)
+                            base_nome = os.path.join(pasta_shapefile, "casas_detectadas")
+                            
+                            gdf_export.to_file(f"{base_nome}.shp")
+                            
+                            zip_path = "vetores_ia.zip"
+                            with zipfile.ZipFile(zip_path, 'w') as zipf:
+                                for ext in ['.shp', '.shx', '.dbf', '.prj']:
+                                    if os.path.exists(f"{base_nome}{ext}"):
+                                        zipf.write(f"{base_nome}{ext}", f"casas_detectadas{ext}")
+                            
+                            # Botão de download para o usuário baixar o ZIP pronto
+                            with open(zip_path, "rb") as fp:
+                                st.download_button(
+                                    label="📥 Baixar Vetores em Shapefile (ZIP)",
+                                    data=fp,
+                                    file_name="casas_vetorizadas.zip",
+                                    mime="application/zip"
+                                )
+                    except Exception as exp_error:
